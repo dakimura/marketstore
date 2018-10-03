@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +77,10 @@ func (pf *PolygonFetcher) Run() {
 func (pf *PolygonFetcher) streamHandler(msg *nats.Msg) {
 	// quickly parse the json
 	symbol, _ := jsonparser.GetString(msg.Data, "sym")
+
+	if strings.Contains(symbol, "/") {
+		return
+	}
 
 	open, _ := jsonparser.GetFloat(msg.Data, "o")
 	high, _ := jsonparser.GetFloat(msg.Data, "h")
