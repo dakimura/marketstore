@@ -1,19 +1,21 @@
 
-MarketStore Durable Writes Design
-5/26/2016
+MarketStoreの耐久性のある書き込み処理設計
+2016年5月26日
 
--------------------------------------------------------------------
-References:
+### 参考文献
 https://blogs.oracle.com/bonwick/entry/zfs_end_to_end_data
--------------------------------------------------------------------
 
-We are writing data to instances of MarketStore on a regular basis, typically as a result of gathering upstream changes to equities on a set interval of 1 minute. When we write new data to a permanent storage device, disk or SSD etc (hereafter called "disk"), we have to ensure data integrity in case of events like poweroff or a backup that reads the disk data. In these situations, there may be data in volatile memory that is either not written to disk or might be in the process of being written. We need to provide the ability to be certain of these two conditions:
-    A) The data present on disk is always valid and complete
-    B) Data we have reported as "committed" is on disk
+## はじめに
+我々は通常、1分ごとに集計された株式データの変更の結果を定期的にMarketstoreのインスタンス群に書き込みを行なっています。
+永続的なストレージに新しいデータを書き込む際、ハードディスクかSSDなど(以後"ディスク" と呼びます)の場合、電源を切る際やディスクのデータを読み混んでバックアップをとるとき、データの完全性を確保しなければいけません。そうした状況においては、まだ書き込まれていないデータや書き込んでいる途中のデータが揮発性のメモリ上に残っている危険性があります。
+下記2つの状態を確実に判断できる必要があるのです。
 
-- Design considerations
+1.  ディスクに書き込まれたデータは常に有効で完全なものである
+1.  "コミットされた"と報告されたデータはディスクに書き込まれている
 
---- Performance and scale
+## 設計上の配慮
+
+### パフォーマンスとスケール
 
 We are storing data for an increasing number of equities, with a target of 10-20,000 in the near term. At a minimum, we need to be able to keep up with the incoming feed of data which is currently arriving in one minute batches. A naive strategy of performing a filesystem sync after every write is incapable of keeping up with one minute data and has the additional disadvantage of performing too many small writes, which can prematurely "burn out" devices with limited write cycle durability. Modern SSD devices are limited to 800-5,000 write cycles before failure, though on-device DRAM can mitigate this effect depending on OS support for sync to the device DRAM.
 
@@ -95,7 +97,7 @@ A WTSet has the following on-disk structure:
                     Buffer      [RecordCount*RecordLen]byte     //Data bytes
                 }
 
-        3) Write Ahead Log (WAL): Is the first place data is written to disk
+        3) Write Ahead Log (WAL): データがディスクに書き込まれる最初の場所
 The WAL is a file that contains a record of all data written to disk. The WAL is used in two processes:
                     A) TGs are written to the WAL - after the write is complete, a follow-up item is written to the log to show completion of the write
                     B) Startup processing - during system startup, the WAL is "replayed" to establish correctness of written data
@@ -105,13 +107,15 @@ The WAL is a file that contains a record of all data written to disk. The WAL is
         5) Write Validation: Log entries that verify that the BW has successfully committed data to the primary store
 
 --------------------
-WAL Format
+WALファイルのフォーマット
 ---------------------
 
-The WAL file is created using a unique filename derived from UTC system time in nanoseconds, for example:
+Write Ahead Log(WAL)ファイルはUTCシステム時間(ナノ秒)を使ってユニークなファイル名で作られます。たとえば以下のような形です。
+```
     /RootDir/WALFile.1465405207042113300
+```
 
-Each message written to the WAL is prepended by the MID, followed by the message contents, currently either a TG or TI message.
+WALファイルに書き込まれるそれぞれのMessageは先頭にMessage ID (MID), それからMessageの内容となっており、現状これは Transaction Group (TG) Messageもしくは Transaction Info (TI) Messageです。
 
 Note that the WAL can only be read forward as we have to anticipate partially written data.
 
