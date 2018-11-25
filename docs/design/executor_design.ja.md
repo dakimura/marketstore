@@ -1,64 +1,60 @@
 Marketstore Executor
-4/24/2016
+2016年4月24日
 
 - 設計上の配慮
 
-We want to support a flexible way to process a block of time series data for consumption by query clients. Typical patterns today include:
-- Date Range: return all data that lies between a beginning and ending time
-- Latest 200 Entries: return the latest 200 entries in the records
+クエリを行うクライアントのために、我々は時系列データを処理する柔軟な方法を提供したいと考えています。
+典型的には以下のような機能が考えられます。
+* 日時の範囲指定 (Date Range): 開始時間と終了時間の間の全てのデータを返却する
+* 最新200エントリ : レコードの中の最新のもの200エントリを返却する
 
 近い将来、より複雑なケースが現れることも配慮する必要があるでしょう。
-- 200 Day Moving Average: return the calculated moving average for the provided date range
-- Min, Max, Average, etc: Aggregate values of specific fields
+* 200日移動平均: 特定の日時の範囲における移動平均値の返却
+* 最小値、最大値, etc: 特定のデータを集計する
+他にも様々な有効なパターンがあり、実際はそれらの多くはその他のパターンの組み合わせです。例えば、ほとんどのクエリの結果は１つめの制限のうち1つか両方から始まりますが２つめのグループから１つ以上のものを足すといった具合です。
 
-There are many other useful patterns and in fact many of them are composites of each other. For instance, most query results will start with one or both of the first restrictions and add one or more from the second group.
+— パフォーマンスとスケール
+抽象的なインタフェースでその内部のデータ型を隠すことよりも内部のデータに対して直接計算を行わせることに関しては慎重になるべきと考えています。例えば、データの集計はfloat32やfloat64を含むサポートされている数値型のデータに対して最もよく行われる処理ですが、それゆえに、我々はそれぞれのデータ型を処理するネイティブを使ったメソッドを作れるということを認識すべきです。もう一方のやり方として抽象化を行う方法では、それぞれの関数を内部的にループするたびにデータの間接参照やキャストを行っているのです。直接的な方法の方が抽象化する方法より200倍パフォーマンス上速くなり得るのです。
 
---- Performance and scale
+## 設計
 
-We should be careful to enable direct calculations on the underlying data in preference over abstract interfaces that hide the underlying datatypes. For instance, we should recognize that aggregates are most commonly performed on supported numeric types including float32 and float64 and consequently, we can build a method for each of those types that uses native addressing for that type. An alternative abstract approach would use indirection for the type and cast values during the loop execution inside one method. The benefit of the direct approach can be a 200x performance improvement as compared to an abstract implementation.
+### Materialize(具体化)しろ、pipeline処理するな
 
-==============
-Design
-==============
+何らかの処理群をチェインでつないでいくときの中間的な結果はMaterialize(具体化)するべきです。たとえば、日時で絞られたデータセットの平均値を計算するのであれば
+```
+    例 - 2010年1月1日から2011年1月15日までの “始値(Open)” のAVG
+```
+クエリの実行はAVG演算と日時によるデータの範囲制限を結果としてチェインすることを意味するでしょう。効率のためには一部もしくは全てのデータ範囲制限の結果をメモリに乗せることで具体化し、それから具体化された結果上で平均値を計算する方がよいでしょう。それに反して、パイプライン化されたexecutorでは最初の演算子からそれぞれの行を取り出し、それを次の処理に渡し、といったことが行われます。具体化の結果としては、平均値を計算する際に用いられない列はあとに続く処理の流れの中で消え去っています。
+```
+    例 - [Open,High,Low,Close 2010年1月1日 - 2011年1月15日] ==> AVG("Open") ==> 結果: avg_open
+```
+それでは、我々はどのようにO,H,L,Cの4つ全てのフィールドの平均値を計算すべきでしょうか？”始値”(Open)の平均値計算の処理のあとで、他のフィールドの平均値計算に必要な情報を捨て去るのです。１つのやり方としては、全ての平均値をいっぺんに計算するというデータの集計の段階を作るやり方です。
+```
+    例 - [Open,High,Low,Close 2010年1月1日-2011年1月15日] ==> AVG("Open","High","Low","Close") ==> 結果: []avg_ohlc
 
-----------------------------
-Materialize, don't pipeline
-----------------------------
-
-We should materialize intermediate results if we are chaining operations together.  For instance, if we are calculating the avg of a date restricted set:
-
-    Example - Average of "Open" field from 1/1/2010 to 1/15/2011
-
-The query execution implies that we will chain a data restriction operation together with an AVG operator on the results. For efficiency, we should materialize some or all of the result of the restriction operator into memory, then perform the average operator on the materialized result. By contrast, a pipelined executor would take each row from the results of the first operator, pass it to the next and so on. The consequence of this materialization is that the columns not used in the AVG operator are lost to possible downstream operations:
-
-    Example - [Open,High,Low,Close 1/1/2010-1/15/2011] ==> AVG("Open") ==> result: avg_open
-
-So how should we compute the average of all four fields? After the AVG operation on "Open" we've discarded the information necessary to compute AVG for the other fields. One approach is that we can use a stage of aggregation that computes all of the averages at once:
-
-    Example - [Open,High,Low,Close 1/1/2010-1/15/2011] ==> AVG("Open","High","Low","Close") ==> result: []avg_ohlc
-
-For more types of operators applied to the same data, we could stack operations:
-
-    Example - [Open,High,Low,Close 1/1/2010-1/15/2011] ==> AVG("Open","High","Low","Close") ==> result: []avg_ohlc,
+さらに他の演算子を同じデータに対して行う場合、処理をスタックすることもできるでしょう。
+```
+    例 - [Open,High,Low,Close 2010年1月1日-2011年1月15日] ==> AVG("Open","High","Low","Close") ==> 結果:    []avg_ohlc,
                                                        ==> MIN("Open","High","Low","Close") ==>         []min_ohlc,
                                                        ==> MAX("Open","High","Low","Close") ==>         []max_ohlc,
                                                        ==> 200ema("Close") ==>                          []200ema_ohlc
+(Ema: exponential moving average. 指数平滑移動平均)
+ ```
 
-Using this approach, we can imagine querying once to get a list of useful statistics with varying dimensionality over a date range. Note that the 200 day exponential moving average will return a column of values over the date range.
+この方法によって、１つの時間範囲のデータを多面的に処理した有益の統計を１回のクエリで得られるようになります。200日指数平滑移動平均に関しては時間範囲に対してデータ列を返却することに注意してください。
 
-----------------------------
-Chaining Operations
-----------------------------
+### 処理のチェイン
 
-We would like to re-use common operations like date restriction and qualifiers like "> value", so logically we want to enable plans like:
+日時の範囲指定や `>(不等号) 値` のような一般的な処理は再利用したいので、論理的には下記のようなプランを実現したいと考えています。
 
-    Example - [Open,High,Low,Close 1/1/2010-1/15/2011] ==> ["Open > 210"] ==> AVG("Open","Close") => result: []avg_oc,
+```
+    例 - [Open,High,Low,Close 2010年1月1日-2011年1月15日] ==> ["Open > 210"] ==> AVG("Open","Close") => 結果: []avg_oc,
+```
+このケースにおいて、AVG演算において全ての結果を利用できることは分かっていますが、例えば次のようなプランも行いたいことがあります。
+```
+    例 - [Open,High,Low,Close 2010年1月1日-2011年1月15日] ==> 200ema("Close") ==> 200ema_close
+                                                       ==> ["Open > 200ema_close"] ==> AVG("Open","Close") => 結果: []avg_oc,
+```
+スタックの中にある前の処理の結果を次のスタックの処理のために使いました。依存関係があるのです。
 
-In this case, we know that the full results are available to the AVG operation, but we also may want plans like:
-
-    Example - [Open,High,Low,Close 1/1/2010-1/15/2011] ==> 200ema("Close") ==> 200ema_close
-                                                       ==> ["Open > 200ema_close"] ==> AVG("Open","Close") => result: []avg_oc,
-
-We used the result of a previous operation in the stack to compute the next in the stack - a dependency.
-
---------------------------------------> WIP
+--------------------------------------> 作業中(WIP)

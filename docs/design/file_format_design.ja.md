@@ -159,8 +159,8 @@ Two parts to each time interval's data, location and data contents:
         int64               Year
         int64               Intervals: number of intervals within one day
         int64               RecordType: type of record
-			    0: fixed length records
-			    1: variable length records
+             0: fixed length records
+             1: variable length records
 
         int64               Nfields: Number of fields per record
         int64               RecordLength: number of bytes in record
@@ -212,8 +212,9 @@ In the implementation of the catalog for this structure, we can generalize this 
                     catname.bin: "Timeframe"
 
 ### メタデータ管理
-
-A program that uses this format can obtain the metadata it needs by using the filesystem organization directly. The names of the attribute group(e.g. "OHLC" is the group of open, high, low and close prices) as used in the filesystem can be used directly within the program to refer to known, mapped fields of interest. In addition, if there are fields that are unknown to that program present in the filesystem, the program can interrogate the file to determine what is inside and provide access to thos fields if needed.
+このフォーマットを使うプログラムはファイルシステムの構成を直接使う際に必要となるメタデータを得ることができます。ファイルシステムに使われるアトリビュートグループ(例: "OHLC" は始値、高値、安値、終値というアトリビュートのグループ)
+)
+A program that uses this format can obtain the metadata it needs by using the filesystem organization directly. The names of the attribute group() as used in the filesystem can be used directly within the program to refer to known, mapped fields of interest. In addition, if there are fields that are unknown to that program present in the filesystem, the program can interrogate the file to determine what is inside and provide access to thos fields if needed.
 
 For example: if a charting program inquires about symbol BRK - A in a filesystem metadata query, it may determine that BRK - A has data from 2005 to 2016. In 2016, there are OHLC and V data available and the chart defaults to presenting that data. Since the program's filesystem query also reveals additional data including PUTS-2-24-16 for BRK-A, it can query the file header to get the full text and data type description and the user can choose to present some or all of that data on the chart.
 
@@ -258,7 +259,7 @@ However - if we subtract the weekends and non-trading hours(09:30-16:00), we wil
 ---------------------
 サンプルメタデータのレイアウト
 ---------------------
-
+```
 map[Symbol]
     -> map[Timeframe]
         -> map[AttributeGroup]
@@ -273,6 +274,7 @@ map[Symbol + Timeframe + AttributeGroup + Year]
     int: type (0 for fixed width, 1 for variable)
     int: nfields
     int[]: bytes_per_field
+```
 
 ===================END
 Luke Lonergan, Alpaca, 3/23/16, Mooooo.
