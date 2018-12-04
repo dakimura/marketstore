@@ -25,13 +25,5 @@ then
     exit 1;
 fi
 
-rm -f test_ticks.csv
-if [ $? -ne 0 ];
-then
-    echo "Failed"
-    exit 1;
-fi
-
-
 # remove the temporary files
 rm -rf testdata test_ticks.csv tmp.csv
