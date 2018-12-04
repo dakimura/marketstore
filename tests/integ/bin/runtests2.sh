@@ -7,7 +7,8 @@ if [ $? -ne 0 ]; then \
 fi
 
 
-# import ticks-example-1.csv/yaml to TEST/1Min/TICK and check if the output of show commands match ticks-example-1-output.csv
+# import ticks-example-not-sorted-by-time.csv/yaml to TEST/1Min/TICK
+# and check if the output of show commands match ticks-example-not-sorted-by-time-output.csv
 marketstore connect -d `pwd`/testdata/mktsdb <<- EOF
 \create TEST/1Min/TICK:Symbol/Timeframe/AttributeGroup Bid,Ask/float32 variable
 \getinfo TEST/1Min/TICK
