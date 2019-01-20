@@ -37,7 +37,7 @@ OSがdevice DRAMにデータを同期する際にon-device DRAMを使って緩�
 ### データの整合性とmanagement alternatives
 ディスクへの書き込みが失敗していないことを保証するための一般的な方法として、データを２回書き込む実装があります。最初の書き込みが成功したことを示すマーカー処理と組み合わせることで、２回目の書き込みは1回目の書き込みで"不良品ではないと分かっている”情報を判断し、部分的に書き込まれた残りのデータを取り除く処理と置き換えることができます。データベースシステムにおいては、これは”Logging”であるとされます。PostgreSQLではLoggingのスキームは”Write Ahead Log”([ログ先行書き込み](https://ja.wikipedia.org/wiki/%E3%83%AD%E3%82%B0%E5%85%88%E8%A1%8C%E6%9B%B8%E3%81%8D%E8%BE%BC%E3%81%BF))もしくはWALと呼ばれています。データはまずWALに書き込まれ、それからバックグラウンド処理によって主要ストレージに書き込まれるのです。Oracleではこのログは”Redo Log”と呼ばれます。双方のシステムにおいて、書き込まれたデータの即時性と可用性を最大化するために、データは揮発性RAM上でペンディング状態となっているCommit済みのバッファキャッシュから読み込まれます。PostgreSQLでは”buffer cache”、Oracleでは”System ZGlobal Area”, もしくはSGAです。
 
-Alternatives to the traditional logging schemes include using a quorum of servers that store the data in RAM. A write is posted to all of the servers in the cluster and when a quorum report that the data is in volatile RAM, the data is considered to be committed. The volatile RAM contents can then be written sometime later to disk. The premise of this approach is that it is very unlikely that the cluster will all be affected by a poweroff event simultaneously, so the contents of volatile RAM across the quorum should be considered durable. The drawbacks of this approach include the increased complexity required to run a quorum cluster of servers and a more subtle problem of RAM corruptions due to programming bugs and/or security infiltrations.
+この伝統的なLoggingのスキームの代替方法としては、複数サーバの[Quorum](https://ja.wikipedia.org/wiki/Quorum)によるRAMへのデータ保存があります。1つの書き込み命令はクラスタ内の全てのサーバに送信され、揮発性RAMにデータがあるQuorumが形成されたときにそれをCommitされたとみなします。揮発性RAM上のコンテンツはそのあといつかのタイミングでディスクに書き込まれます。このアプローチにおいては「クラスタ内の全サーバが同時にダウンすることはそうそう起きないだろうので、Quorumが形成された揮発性RAM内のコンテンツは恒久性があるとみなしていい」という仮定に基づいています。この欠点としてはサーバクラスタでQuorumを実行することで複雑さが増すことや、バグやセキュリティ侵害によるRAMの破壊といったより微妙な問題が起き得ることがあります。
 
 — 今後の展望
 近い将来、もしかすると2018年までには、RAMと同程度の書き込み遅延(16Byteのデータの書き込みに1マイクロ秒)でハードディスクと対抗できるほどの容量を持った新しい種類の不揮発性メモリが登場しているかもしれません。そうしたデバイスは永続データの扱い方を根本的に変えてしまうでしょう。しかし少なくともこれから数年の間は、そうしたデバイスは超高速なディスクデバイスのようなものとして扱われるでしょう。
@@ -49,24 +49,24 @@ Alternatives to the traditional logging schemes include using a quorum of server
 
 我々は耐久性のある書き込み処理のために次のようなエレメントを持ったLoggingシステムを実装します。
 
-0)  Message ID (MID): WALに書き込まれる全てのメッセージはMIDが頭に付与されており、そのあとにメッセージのタイプがかかれます。Every message written to the WAL is prepended by the MID, indicating what type of message follows. The MID is structured on-disk:
+0)  Message ID (MID): WALに書き込まれる全てのメッセージはMIDが頭に付与されており、そのあとにメッセージのタイプがかかれます。ディスク上のMIDは以下のような構成になっています。
 ```
 type MID struct {
     MID         int8   //Message ID:
-                            // 0: TG data
-                            // 1: TI - Transaction Info (see below)
-                            // 2: WALStatus - WAL Status info (see below)
+                            // 0: TG - Transaction Group
+                            // 1: TI - Transaction Info (下記参照)
+                            // 2: WALStatus - WAL Status info (下記参照)
                 }
 ```
-0a) Transaction Info (TI): A transaction info message marks the write status of transactions. It is used in two situations: When a TG is written to the WAL and when the BW writes a TG to the primary store. The on-disk format of a TI is:
+0a) Transaction Info (TI): 1つのTransaction Infoメッセージはトランザクションの書き込み処理の状態をマーク付けします。これは２つの場面で使用されます。1つはTGがWAL (Write Ahead Log) に書き込まれるとき、もう一つは BWがTGを主記憶に書き込むときです。ディスク上でのTIの構造は以下のようになっています。
                 type TI struct {
-                    TGID        int64
-                    DestID      int8   //Identifier for which location [ is being / has been ] written
-                                       //0: WAL, 1: Primary Store
-                    Status      int8   //0: Preparing to commit, 1: ***Commit intent sent, 2: Commit complete
+                    TGID        int64  // Transaction Group ID
+                    DestID      int8   //場所を書き込む（書き込んできている）ためのID
+                                       //0: WAL, 1: 主記憶
+                    Status      int8   //0: Commitを準備している, 1: (※)Commit intentを送信した, 2: Commit完了
                 }
-                *** Note: Commit intent state is for future multi-party commit support. Typical processes will only use states 0 and 2
-
+                (※) 注記: Commit intent (1)の状態は将来multi-party commitをサポートするためのものです。典型的な処理はで0か2だけを使用します。
+                
 1) Transaction Group (TG): A group of data committed at one time to WAL and primary store
 Each TG is composed of some number of WTSets and is the smallest unit of data committed to disk. A TG has an ID that is used to verify whether the TG has been successfully written. A TG has the following on-disk structure:
                 type TG struct {

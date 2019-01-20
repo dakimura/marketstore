@@ -90,35 +90,34 @@ There are numerous benefits to using this approach including:
 
 
 =============================================================================================
-A) Fixed width data records
+A) 固定幅のデータ
 =============================================================================================
 
+固定幅のフィールドに関して、私たちはもっとも単純なストレージスキームを使用しています。 各バイナリのサイズを固定することで、それぞれのデータ値の位置を直接数式を用いて計算できるのです。例えばOHLCのようなサイズが固定されたデータのフィールドを保存する場合、各フィールドと要素のファイル内での位置を下記のように計算できます。
+    データの位置=ファイルヘッダサイズ + レコードサイズ *
+        (日数 * 解像度 + (インターバル - 1)) + keyサイズ
+    レコードサイズ=keyサイズ + 値のサイズ
+    解像度=1日あたりのインターバルの数
+    日数=年始からの日数
+    インターバル=１日の始まりからのTICKの数
 
-For fixed width fields we can use the simplest possible storage scheme - binary fixed length storage where the location of each value can be computed using a direct formula. For instance, if we are storing a field with a fixed record size like OHLC, we can use the following to compute the location of each field and element in the file:
-    data_location=file_header_size + record_size *
-        (days * resolution + (intervals - 1)) + key_size
-    record_size=key_size + value_size
-    resolution=number of intervals per day
-    days=number_of_days_from_beginning_of_year
-    intervals=number_of_ticks_from_beginning_of_day
-
-===> Fixed width record format:
+===> 固定幅レコードのフォーマット:
 ===================================
-    Key: 64-bit interval number within the year
-    Values: fixed number of data elements of fixed width each
-    Pad: padding to align the record to a 64-bit boundary
+    Key: 1年以内における64-bit インターバル数
+    値: それぞれの固定幅のデータ要素の固定値
+    Pad: レコードを64bitごとに区切るためのパディング
 ===================================
 
 
-Example 1) OHLC data, element size: 64-bit, number of elements 4:
-    64-bit key, 4 x 64-bit float values, no padding
-    record_size = 40 bytes
+例 1) OHLC データ, 要素サイズ: 64-bit, 要素数は 4:
+    64-bit key, 4 x 64-bit 浮動小数点値, パディングなし
+    レコードサイズ = 40 bytes
 
-Example 2) OHLCV data, Element size: 32-bit
-    64-bit key, 4 x 32-bit float values, 1 x 32-bit value, 32-bit padding
-    record_size = 32 bytes (28 bytes of data, 4 bytes of pad)
+例 2) OHLCVデータ, 要素サイズ: 32-bit
+    64-bit key, 4 x 32-bit 浮動小数点値, 1 x 32-bit 値, 32-bitのパディング
+    レコードサイズ = 32 bytes (28 bytesのデータと4 bytesのパディング)
 
-*** Note: when mapping structs in C/C++ or Go to the file contents (such as a read buffer), the struct should contain the padding as data items to allow for proper iteration through an array of the struct, for example:
+*** 注意: C/C++もしくはGolangの構造体をファイルコンテンツに(read bufferなどのように)マッピングするとき、 その構造体はパディングをデータの1要素として保持して、構造体の配列に対してループを回したときに正しく動くようにしてやる必要があります。たとえば下記のようにです。
 
           type OHLCV struct {
               index         int64
@@ -129,64 +128,63 @@ Example 2) OHLCV data, Element size: 32-bit
 
 
 =============================================================================================
-B) Variable width data records
+B) 可変長幅データレコード
 =============================================================================================
 
-We need an indirect access structure when we have variable length data. One example is trading data (tick data) where there are a variable number of entries in a given time period.
+可変長幅のデータがある場合、間接的にアクセスする構造が必要になります。
+１つの例としては、ある決められた期間に存在するデータの数がさまざまに変わりうる取引データ(TICK)です。
 
-We can extend the fixed length format to accommodate indirection - instead of writing data to the record locations identified by our offset, we write the location of where the data for that time period is located within the file along with it's length. We can write an arbitrary amount of data for each interval at the end of the file, and then we write the offset to the beginning of that data in the interval's time indexed slot.
+間接的なアクセスを行うために、固定長データの場合のフォーマットを拡張することができます。
+先ほど述べたようなオフセット計算によって割り出されるレコードの位置にデータを直接書き込む代わりに、その期間のデータを書き込んだ位置とそのサイズをそこに書き込むのです。そうすることで、そのファイルの末尾にそれぞれのインターバルに対して任意のデータサイズのデータを書き込めます。そして、そのデータの開始位置までのオフセットをそのインターバルのtime indexed slotに書き込むのです。
 
-Each data record format is defined by the header values for ElementTypes, with the data aligned to 64-bit boundaries
+それぞれのデータレコードのフォーマットは、64-bitごとに区切られたElementTypeのヘッダ値によって定義されます。
 
-===> Variable width record format:
-Two parts to each time interval's data, location and data contents:
+===> 可変幅レコードフォーマット:
+それぞれのインターバル、位置、データコンテンツに対して2つのパートがあります。
 
-1) location data stored in fixed size area for each interval
+1) それぞれのインターバルのための固定サイズ陵域に保存される位置データ
 ===================================
-    Key: 64-bit interval number within the day (index)
-    Offset: 64-bit location of the data for this interval within this file
-    Len: 64-bit size of data field in bytes
-===================================
-
-2) variable length data stored at the end of the file
-===================================
-    Values: Repeating records comprising data, format is native binary with shape defined by ElementTypes
+    Key: 64-bit で表される1日あたりのインターバル数(index)　
+    Offset: 64-bit で表される、このインターバルにおけるデータがこのファイル内に書かれている位置
+    Len: 64-bit で表されるデータサイズ[bytes]
 ===================================
 
-==> File Header *
-        int64               Version
-        [256]byte           Description: Description of the Attribute Group UTF-8 coded string
-        int64               Year
-        int64               Intervals: number of intervals within one day
-        int64               RecordType: type of record
-             0: fixed length records
-             1: variable length records
+2) ファイルの末尾に保存される可変幅データ
+===================================
+    Values: データを含む複数のレコード情報。フォーマットはElementTypesによって型が定義されるネイティブのバイナリ。
+===================================
 
-        int64               Nfields: Number of fields per record
-        int64               RecordLength: number of bytes in record
-*** Note that when we have Variable Length data, RecordLength is the length of the {index, offset, len} entry (24 bytes)
+==> ファイルヘッダ *
+        int64               Version: バージョン情報
+        [256]byte           Description: UTF-8文字列のAttribute Groupの説明文
+        int64               Year: 年
+        int64               Intervals: 1日におけるインターバル数
+        int64               RecordType: レコードの種類
+             0: 固定幅レコード
+             1: 可変長幅レコード
 
-        int64               Reserved
-        [1024][32]byte      ElementNames: UTF-8 coded string, 32 bytes per element
-        [1024]byte          ElementTypes: 1024-bytes(unsigned), type of each data element:
+        int64               Nfields: 1レコードごとのフィールド数
+        int64               RecordLength: レコードのバイト数
+*** 注意:  可変長幅のデータがあるとき, RecordLengthは{index, offset, len}要素のサイズ(=24 bytes)になります。
+
+        int64               Reserved: 予約陵域
+        [1024][32]byte      ElementNames: UTF-8文字列, 要素ごとに32 bytes
+        [1024]byte          ElementTypes: 1024-bytes(符号なし), それぞれのデータ要素の種類:
                             0: float32
                             1: integer32
                             2: float64
                             3: integer64
-                            4: epoch (time index type, equiv to integer 64)
-                            5: byte (unsigned)
-                            6: bool (equivalent to byte)
+                            4: epoch (time index type, integer64と同義)
+                            5: byte (符号なし)
+                            6: bool (byteと同義)
                             7: none
                             8: string
         [365]int64          Reserved
 
-Total header fixed size: 37024 Bytes = 8 + 256 + 3*8 + 3*8 + 1024*32 + 1024 + 365*8
 
-        [365]int64          Reserved
+総ヘッダサイズ: 37024 Bytes = 8 + 256 + 3*8 + 3*8 + 1024*32 + 1024 + 365*8
 
-Total header fixed size: 37024 Bytes = 8 + 256 + 3*8 + 3*8 + 1024*32 + 1024 + 365*8
-
-***NOTE*** Data records are aligned to 64-bit boundaries
+***注意*** データレコードは64bitごとに区切られています。
 
 ---------------------
 Filesystem structure and catalog
