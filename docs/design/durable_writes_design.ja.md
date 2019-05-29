@@ -47,9 +47,9 @@ OSがdevice DRAMにデータを同期する際にon-device DRAMを使って緩�
 
 ### エレメント(要素)
 
-我々は耐久性のある書き込み処理のために次のようなエレメントを持ったLoggingシステムを実装します。
+我々は耐久性のある書き込み処理のために次のようなエレメントを持ったWriteAheadLoggingシステムを実装します。
 
-0)  Message ID (MID): WALに書き込まれる全てのメッセージはMIDが頭に付与されており、そのあとにメッセージのタイプがかかれます。ディスク上のMIDは以下のような構成になっています。
+0)  Message ID (MID): WALに書き込まれる全てのメッセージはMIDが頭に付与されており、メッセージのタイプがかかれます。ディスク上のMIDは以下のような構成になっています。
 ```
 type MID struct {
     MID         int8   //Message ID:
@@ -58,7 +58,7 @@ type MID struct {
                             // 2: WALStatus - WAL Status info (下記参照)
                 }
 ```
-0a) Transaction Info (TI): 1つのTransaction Infoメッセージはトランザクションの書き込み処理の状態をマーク付けします。これは２つの場面で使用されます。1つはTGがWAL (Write Ahead Log) に書き込まれるとき、もう一つは BWがTGを主記憶に書き込むときです。ディスク上でのTIの構造は以下のようになっています。
+0a) Transaction Info (TI): 1つのTransaction Infoメッセージはトランザクションの書き込み処理の状態をマーク付けします。これは２つの場面で使用されます。1つはTGがWAL (Write Ahead Log) に書き込まれるとき、もう1つは BWがTGを主記憶に書き込むときです。ディスク上でのTIの構造は以下のようになっています。
                 type TI struct {
                     TGID        int64  // Transaction Group ID
                     DestID      int8   //場所を書き込む（書き込んできている）ためのID
@@ -67,14 +67,15 @@ type MID struct {
                 }
                 (※) 注記: Commit intent (1)の状態は将来multi-party commitをサポートするためのものです。典型的な処理はで0か2だけを使用します。
                 
-1) Transaction Group (TG): A group of data committed at one time to WAL and primary store
-Each TG is composed of some number of WTSets and is the smallest unit of data committed to disk. A TG has an ID that is used to verify whether the TG has been successfully written. A TG has the following on-disk structure:
+1) Transaction Group (TG): WALと主記憶に同時にコミットされる１グループのデータです。
+
+各TGはいくつかのWTSetから構成されており、ディスクにコミットされるデータの最小単位です。TGにはTGの書き込みが成功したかを検証するためのIDが付与されています。TGは次のようなディスク上の構成を持っています。
                 type TG struct {
-                    TGLen               int64          //The length of the TG data for this TGID, starting with the TGID and excluding the checksum
-                    TGID                int64          //A "locally unique" transaction group identifier, can be a clock value
-                    WTCount             int64          //The count of WTSets in this TG
-                    WTGroup             [WTCount]WTSet //The contents of the WTSets
-                    Checksum            [16]byte       //MD5 checksum of the TG contents prior to the checksum
+                    TGLen               int64          //このTGIDに該当するTGデータの長さで、TGIDは含みますがチェックサムは含まない長さです。
+                    TGID                int64          //マシンローカルでユニークなTransaction Groupの識別子で、エポックタイム(ナノ秒)などの時刻が使われるでしょう。
+                    WTCount             int64          //TG内のWTSetの数
+                    WTGroup             [WTCount]WTSet //WTSetの内容
+                    Checksum            [16]byte       //(チェックサムを除くTGの内容の)MD5チェックサム。
                 }
 
 2) Write Transaction Set (WTSet): An individual writeable "chunk" of data
@@ -101,7 +102,7 @@ The WAL is a file that contains a record of all data written to disk. The WAL is
                     A) TGs are written to the WAL - after the write is complete, a follow-up item is written to the log to show completion of the write
                     B) Startup processing - during system startup, the WAL is "replayed" to establish correctness of written data
 
-4) Background Writer (BW): An asynchronous process that writes the TG data to the primary store. Note that the TGs are written to the WAL and the primary data store independently. After the BG writes a TG to the primary store, it also writes a "commit complete" for that TG to the WAL.
+4) Background Writer (BW): TGデータを主記憶に書き込む非同期のプロセスです。 TGデータはWALと主記憶に独立して両方書き込まれることに注意してください。BWはTGを主記憶に書き込んだ後に「commit complete」をWALに書き込みます。
 
 5) Write Validation: Log entries that verify that the BW has successfully committed data to the primary store
 
@@ -114,21 +115,21 @@ Write Ahead Log(WAL)ファイルはUTCシステム時間(ナノ秒)を使って�
     /RootDir/WALFile.1465405207042113300
 ```
 
-WALファイルに書き込まれるそれぞれのMessageは先頭にMessage ID (MID), それからMessageの内容となっており、現状これは Transaction Group (TG) Messageもしくは Transaction Info (TI) Messageです。
+WALファイルに書き込まれるそれぞれのMessageは先頭にMessage ID (MID), それから各Messageの内容となっており、現状Messageは Transaction Group (TG) Messageもしくは Transaction Info (TI) Messageとなっています。
 
-Note that the WAL can only be read forward as we have to anticipate partially written data.
+一部分だけ書き込まれてしまったデータを考慮するために、WALは順方向にしか読み取れないことに注意してください。
 
-The first message in a WAL file is always the WAL Status Message, which has the format:
+WALファイル内の最初のMessageは常にWAL Status Messageで、次のようなフォーマットです。
                 type WALStatus struct {
-                    FileStatus    int8  // 1: Actively in use or not closed programatically
-                                        // 2: Closed (no process is using file)
-                    ReplayState   int8  // 1: Not yet processed for replay
-                                        // 2: Replayed successfully
-                                        // 3: Replay in process
-                    OwningPID     int64 // PID of the process using this WAL file
+                    FileStatus    int8  // 1: 現在使用中か、プログラムによってCloseされていない状態
+                                        // 2: Close (このファイルを使用しているプロセスが存在しない状態)
+                    ReplayState   int8  // 1: Replayのためにまだ処理されていない
+                                        // 2: Replayされた
+                                        // 3: Replay中
+                    OwningPID     int64 // このWALファイルを使用しているプロセスのID(PID)
                 }
 
-Generally, if a WAL file  has the state: WALStatus{2,2} it can be safely deleted because it has been processed and the contents are durably written to the primary store. Here is a summary of each state and the inferred consequences:
+一般的に,もしWALStatusが{FileStatus:2, ReplayState:2}の状態であれば安全に削除することができます。なぜならそれは正常に処理され、データが主記憶にdurableに書き込まれたことを意味するからです。 それぞれの状態と、続いて起こると予想される動作について次にまとめておきます。
                 WALStatus       State                               Actions at System Startup
                 ---------       -------------------------------     ------------------------------
                 {1,1}           Active - File is being used OR      File should be checked for an active
