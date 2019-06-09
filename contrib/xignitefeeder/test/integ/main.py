@@ -30,18 +30,23 @@ def get_delay(symbol, timeframe, attrgroup):
     client = pymkts.Client(MSTORE_ENDPOINT)
 
     now = datetime.datetime.utcnow()
-    before3hours = now - datetime.timedelta(hours=300)
+    before3hours = now - datetime.timedelta(hours=3)
     start = "{0:%Y-%m-%d %H:%M:%S}".format(before3hours)
 
     param = pymkts.Params(symbol, timeframe, attrgroup, start=start)
 
     res = client.query(params=param)
 
+    # if there is no data and failed to get the delay, return -1
+    record_num = len(res.first().df().index)
+    if record_num == 0:
+        return -1
+
     # get the time of the latest deal
     last_row = res.first().df()[-1:]
     last_deal_datetime = last_row.index[0].tz_convert(None)
 
-    # return the delay
+    # return the delay.
     return (now - last_deal_datetime).total_seconds()
 
 
