@@ -35,9 +35,13 @@ def get_delay(symbol, timeframe, attrgroup):
 
     param = pymkts.Params(symbol, timeframe, attrgroup, start=start)
 
-    res = client.query(params=param)
+    try:
+        res = client.query(params=param)
+    except Exception:
+        # if there is no data or failed to get the delay, return -1
+        return -1
 
-    # if there is no data and failed to get the delay, return -1
+    # if there is no data or failed to get the delay, return -1
     record_num = len(res.first().df().index)
     if record_num == 0:
         return -1
