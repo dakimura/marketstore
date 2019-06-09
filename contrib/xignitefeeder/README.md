@@ -6,6 +6,9 @@
 
 ## Example configuration
 ```yaml
+log_level: debug
+utilities_url: "localhost:5993"
+
 bgworkers:
   # -----------------------
   # XigniteFeeder gets the realtime stock data by Xignite API (https://www.quick.co.jp/qxapis/index.php)
