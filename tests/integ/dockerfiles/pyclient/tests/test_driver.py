@@ -2,11 +2,13 @@ import numpy as np
 import pandas as pd
 import pymarketstore as pymkts
 from datetime import datetime, timezone
+import os
 
 def test_driver():
     data = np.array([(pd.Timestamp('2017-01-01 00:00').value / 10**9, 10.0)], dtype=[('Epoch', 'i8'), ('Ask', 'f4')])
 
-    cli = pymkts.Client()
+    host = os.environ.get('MARKETSTORE_HOST', 'localhost:5993')
+    cli = pymkts.Client('http://{}/rpc'.format(host))
 
     cli.write(data, 'TEST/1Min/Tick')
 

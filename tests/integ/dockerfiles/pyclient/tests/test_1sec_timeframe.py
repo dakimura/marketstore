@@ -3,6 +3,7 @@
 Integration Test for 1Sec timeframe
 """
 import pytest
+import os
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,8 @@ DATA_TYPE_CANDLE = [('Epoch', 'i8'), ('Open', 'f8'), ('High', 'f8'), ('Low', 'f8
 MARKETSTORE_HOST = "localhost"
 MARKETSTORE_PORT = 5993
 
-client = pymkts.Client('http://localhost:5993/rpc')
+host = os.environ.get('MARKETSTORE_HOST', 'localhost:5993')
+client = pymkts.Client('http://{}/rpc'.format(host))
 
 
 def timestamp(datestr):

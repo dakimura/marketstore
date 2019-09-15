@@ -1,6 +1,8 @@
 import pymarketstore as pymkts
+import os
 
-client = pymkts.Client(endpoint='http://localhost:5993/rpc')
+host = os.environ.get('MARKETSTORE_HOST', 'localhost:5993')
+client = pymkts.Client(endpoint='http://{}/rpc'.format(host))
 
 
 def test_not_empty_database():

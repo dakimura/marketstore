@@ -4,8 +4,10 @@ import numpy as np
 import pandas as pd
 
 import pymarketstore as pymkts
+import os
 
-client = pymkts.Client('http://localhost:5993/rpc')
+host = os.environ.get('MARKETSTORE_HOST', 'localhost:5993')
+client = pymkts.Client(endpoint='http://{}/rpc'.format(host))
 
 TIMEFRAME = '1Min'
 ATTRGROUP = 'TICK'
